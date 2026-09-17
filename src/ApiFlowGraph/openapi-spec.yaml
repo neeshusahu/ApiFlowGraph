@@ -1,0 +1,110 @@
+openapi: 3.1.0
+info:
+  title: Practice API (Organizations + Users, with explicit links)
+  version: "1.0"
+  description: >
+    Realistic field shapes for createOrganization and createUser, modeled on
+    common identity/org-management API patterns, with a hand-authored
+    `links` object declaring the dependency between them. Real specs rarely
+    author links — this simulates a DX engineer noticing the relationship
+    and encoding it properly, which is the realistic version of "skill
+    generation from specs."
+
+paths:
+  /organizations:
+    post:
+      operationId: createOrganization
+      summary: Create an organization
+      description: Creates a new organization in the current environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: A descriptive name for the organization. Does not need to be unique.
+                domain_data:
+                  type: array
+                  description: One or more domains to associate with the organization.
+                  items:
+                    type: object
+                    properties:
+                      domain:
+                        type: string
+                      state:
+                        type: string
+                        enum: [pending, verified]
+                external_id:
+                  type: string
+                  description: Your own identifier for this organization, for mapping to your system.
+                metadata:
+                  type: object
+                  description: Freeform key/value pairs associated with the organization.
+      responses:
+        "201":
+          description: Organization created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: org_01EHZNVPK3SFK441A1RGBFSHRT
+                  name:
+                    type: string
+                  domains:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        domain: { type: string }
+          links:
+            CreateUserInOrganization:
+              operationId: createUser
+              parameters:
+                o_id: '$response.body#/id'
+            
+
+  /users:
+    post:
+      operationId: createUser
+      summary: Create a user
+      description: Creates a new user and assigns them to an organization.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, o_id]
+              properties:
+                email:
+                  type: string
+                  format: email
+                o_id:
+                  type: string
+                 
+                first_name:
+                  type: string
+                last_name:
+                  type: string
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: user_01EHZNVPK3SFK441A1RGBFSHRT
+                  email:
+                    type: string
+                  o_id:
+                    type: string
