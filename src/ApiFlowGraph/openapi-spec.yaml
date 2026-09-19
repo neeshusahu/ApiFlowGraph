@@ -67,8 +67,11 @@ paths:
             CreateUserInOrganization:
               operationId: createUser
               parameters:
-                o_id: '$response.body#/id'
-            
+                organization_id: '$response.body#/id'
+              description: >
+                The `id` returned when creating an organization can be used
+                as `organization_id` when calling createUser, to add a user
+                to this organization.
 
   /users:
     post:
@@ -81,14 +84,14 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email, o_id]
+              required: [email, organization_id]
               properties:
                 email:
                   type: string
                   format: email
-                o_id:
+                organization_id:
                   type: string
-                 
+                  description: The organization this user belongs to.
                 first_name:
                   type: string
                 last_name:
@@ -106,5 +109,5 @@ paths:
                     example: user_01EHZNVPK3SFK441A1RGBFSHRT
                   email:
                     type: string
-                  o_id:
+                  organization_id:
                     type: string

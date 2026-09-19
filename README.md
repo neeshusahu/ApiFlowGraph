@@ -1,190 +1,122 @@
 # ApiFlowGraph
 
-Generates an agent-facing "skill" document from an OpenAPI spec, with API operations ordered by their actual data dependencies instead of the order they happen to appear in the spec.
+Generates an agent-facing "skill" document from an OpenAPI spec, with API
+calls ordered by their actual data dependencies — not the order they happen
+to appear in the spec.
 
-## What it does
+## The problem
 
-Given an OpenAPI spec:
+Given an API with a real dependency (e.g. you must create an organization
+before you can create a user under it), an LLM asked to generate agent
+instructions directly from the raw spec can get the sequence right but still
+invent wrong field names, incorrect required-field lists, or drop response
+details — even on a two-operation spec, and inconsistently across repeated
+runs on identical input. That unreliability gets worse, not better, as a
+spec grows: dependency-finding complexity scales roughly with the square of
+the operation count, while an LLM's ability to reliably track relationships
+across a large spec doesn't scale to match.
 
-1. **Extracts** every path/operation (request body shape, response codes, and any `links` declared on a response) into a plain object model (`OpenApiGraphExtractor`).
-2. **Builds a dependency graph** from those `links`: if operation A's response `links` to operation B, A must run before B. The graph is topologically sorted (`DependencyGraph`) to produce a valid call order, and detects cycles.
-3. **Prompts a local LLM** (via [Ollama](https://ollama.com), model `phi4-mini`) with the resolved graph to write a `SKILL.md`-style markdown document: step-by-step, agent-facing instructions for calling the API in the correct order, including which field from an earlier response must be threaded into a later request.
+## The approach
 
-There are three prompt strategies (`src/ApiFlowGraph/Prompt/`), which trade off how much they trust the pre-computed graph versus the raw spec:
+1. **Extract** every operation's request/response shape and any `links` it
+   declares, into a plain object model (`OpenApiGraphExtractor`).
+2. **Build a dependency graph** from those `links` and topologically sort it
+   (`DependencyGraph`) to get a correct call order, with cycle detection.
+3. **Prompt a local LLM** (Ollama, `phi4-mini`) with the *resolved* graph to
+   phrase the result as a `SKILL.md`-style document — the model's job is
+   wording, not discovering the dependency.
 
-| Prompt | Input given to the model |
+Three prompt strategies are implemented to compare this directly:
+
+| Prompt | Given to the model |
 |---|---|
-| `GraphOnlyPrompt` | Only the resolved graph (operations + call sequence). |
-| `GraphWithSpecPrompt` | The resolved graph (as ground truth) plus the full spec, for richer descriptions/examples. |
-| `RawSpecPrompt` | The raw spec only; the model derives sequencing and field mappings itself. |
+| `RawSpecPrompt` | Raw spec text only — model must find dependencies itself |
+| `GraphOnlyPrompt` | Only the pre-resolved graph |
+| `GraphWithSpecPrompt` | Resolved graph as ground truth, plus raw spec for richer phrasing |
 
-`Program.cs` currently wires up `GraphOnlyPrompt`.
+## Sample output
 
-## Requirements
-
-- [.NET 9 SDK](https://dotnet.microsoft.com/download)
-- [Ollama](https://ollama.com) running locally on `http://localhost:11434` with the `phi4-mini` model pulled:
-  ```
-  ollama pull phi4-mini
-  ```
-
-## Project structure
-
-```
-src/ApiFlowGraph/
-  Program.cs                  entry point: load spec, extract graph, prompt the model
-  OpenApiGraphExtractor.cs    walks an OpenApiDocument into Path/Operation/Response models
-  Dependency/DependencyGraph.cs  topological sort over operation links
-  Models/                     Path, Operation, RequestBody, Response, Link, Properties
-  Prompt/                     the three prompt strategies described above
-  openapi-spec.yaml           sample spec used by Program.cs
-
-tests/ApiFlowGraph.Tests/     xUnit tests for the extractor and dependency graph
-```
-
-## Running
-
-```
-dotnet build ApiFlowGraph.sln
-dotnet run --project src/ApiFlowGraph/ApiFlowGraph.csproj
-```
-
-This loads `src/ApiFlowGraph/openapi-spec.yaml`, resolves the dependency graph, and prints the generated skill markdown to the console.
-
-### Sample output (`GraphOnlyPrompt`)
-
-Running against the bundled `openapi-spec.yaml` (an organization/user API with a `links` dependency between them), using `GraphOnlyPrompt` (only the resolved graph is given to the model), produces something like:
-
-### Sample output (`GraphOnlyPrompt`)
-
-Running against the bundled `openapi-spec.yaml` (an organization/user API with a `links` dependency between them), using `GraphOnlyPrompt` (only the resolved graph is given to the model), produces something like:
+Given a spec where creating a user requires an existing organization's `id`
+(declared via an OpenAPI `links` object), `GraphOnlyPrompt` produces:
 
 ````markdown
 # Skill: Create Organization and Add User
 
-## Instructions:
+1. **Create an organization** — POST /organizations
+   { "name": "<organization_name>", "domain_data": [], "external_id": "", "metadata": {} }
+   The response contains the new organization's `id`.
 
-1. **Create an organization**
-   - Send a POST request to create a new organization.
-```json
-     {
-       "name": "<organization_name>",
-       "domain_data": [],
-       "external_id": "",
-       "metadata": {}
-     }
-```
-   - The response will contain the `id` of the newly created organization.
-
-2. **Create a user**
-   - Send a POST request to create a new user and assign them to an existing organization using its ID.
-```json
-     {
-       "email": "<user_email>",
-       "organization_id": "<organization_id_from_step_1>",
-       "first_name": "<user_first_name>",
-       "last_name": "<user_last_name>"
-     }
-```
-   - The response will confirm the creation of a new user.
-
-## Example:
-
-```markdown
-# Step 1: Create Organization
-
-- Name: `Acme Corp`
-- Domain Data: []
-- External ID: (optional)
-- Metadata: {}
-
-POST /organizations HTTP/1.1
-Content-Type: application/json
-
-{
-  "name": "Acme Corp",
-  "domain_data": [],
-  "external_id": "",
-  "metadata": {}
-}
-
-# Step 2: Create User and Assign to Organization
-
-Assuming the organization ID from step 1 is `org-12345`
-
-POST /users HTTP/1.1
-Content-Type: application/json
-
-{
-  "email": "john.doe@example.com",
-  "organization_id": "org-12345",
-  "first_name": "John",
-  "last_name": "Doe"
-}
-```
+2. **Create a user** — POST /users, using the `id` from step 1
+   { "email": "<user_email>", "organization_id": "<id_from_step_1>",
+     "first_name": "<user_first_name>", "last_name": "<user_last_name>" }
 ````
 
-Note the correct ordering: `createOrganization` before `createUser`, with `organization_id` threaded from the first response into the second request — exactly the dependency the `links` object in the spec declares.
+Correct ordering, and `id` is correctly threaded into `organization_id` —
+exactly the dependency the spec's `links` object declares.
 
-### Sample output (`RawSpecPrompt`)
-
-A separately generated skill for the same spec, this time using `RawSpecPrompt` (the raw spec file contents passed as a plain string, with no pre-computed graph):
+For comparison, `RawSpecPrompt` (raw spec text only, no pre-computed graph)
+on the same spec produces:
 
 ````markdown
 # Skill to Create Organization and User with Dependency Links
 
-## Steps:
-
-1. Call `/organizations` endpoint using `createOrganization`
-   - Required fields for request body are `[name, domain_data]`.
-2. Extract `id` from response of step 1.
-3. Use extracted `id` as the value for field `organization_id` in a new call to `/users`.
-
-## Skill Execution:
+1. Call `/organizations` using `createOrganization`
+   - Required fields: `[name, domain_data]`
+2. Extract `id` from the response.
+3. Use extracted `id` as `organization_id` in a call to `/users`.
 
 ### Step 1: Create Organization
-- Call endpoint: POST /organizations with body containing:
-  - name (string): A descriptive name for the organization, does not need to be unique.
-  - domain_data (array of objects):
-    - Each object contains `domain` and `state`.
-      - Example Object in array:
-```json
-        {
-          "domain": "<string>",
-          "state": "pending | verified"
-        }
-```
-  - external_id (string) — required: Your own identifier for this organization, used to map it back into your system.
-  - Optional fields can include metadata as key/value pairs.
+- name (string): required
+- domain_data (array of { domain, state }): required
+- Required field: external_id — your own identifier for this organization
 
-### Step 2: Extract Organization ID
-- From the response of step 1:
-```json
-  {
-    "id": "<string>"
-  }
-```
-- Store `response.body#/id` for use in subsequent steps or requests to `/users`.
-
-### Step 3: Create User and Link with Organization ID
-- Call endpoint: POST /users with body containing at least:
-  - email (string): Must be a valid format.
-  - organization_id (string): The organization id extracted from step 1.
-
-Optional fields for user creation can include first_name, last_name. These are not required but may enhance the user's profile information if provided.
+### Step 3: Create User
+- email (string), organization_id (string): from step 1
+- Optional: first_name, last_name
 ````
 
-### Known inaccuracies in generated skills
+Sequencing and field-threading are still correct here too — but this run
+claims `domain_data` and `external_id` are required. They aren't (see below).
 
-Checked against `openapi-spec.yaml`'s actual `required` arrays, the model doesn't always get required-vs-optional right:
+## What testing found
 
-- The sample above claims required fields for `/organizations` are `[name, domain_data]`. The spec's `required` array is `[name]` only (`openapi-spec.yaml:25`) — `domain_data` is optional.
-- It separately labels `external_id` as a "Required field". `external_id` isn't in the `required` list at all (`openapi-spec.yaml:41-43`) — it's optional, same as `metadata`.
+Comparing `RawSpecPrompt` against a known-correct answer (verified line-by-line
+against the spec's own `required` arrays):
 
-## Testing
+- Got the **call sequence and field-threading right** (organization → user,
+  `id` → `organization_id`).
+- **Got required-vs-optional wrong** — claimed `domain_data` and
+  `external_id` were required; the spec marks both optional
+  (`openapi-spec.yaml:25`, `:41-43`). This happened with the correct answer
+  sitting in plain text directly in front of the model — not a missing-context
+  problem, a using-the-context-correctly problem.
+- **Output completeness varied between runs** on identical input — some runs
+  dropped fields present in earlier runs of the same prompt.
+
+This is the core case for the graph layer: pulling the relevant fact out and
+handing it to the model in isolation is more reliable than trusting the model
+to find and use it correctly inside a larger document, and it doesn't degrade
+as the document grows, since extraction is a fixed, linear pass over the spec.
+
+**Known extractor gaps** (so `GraphOnlyPrompt` isn't fully tested on the same
+question yet): `required` field lists and nested array/object item shapes
+aren't currently propagated by the extractor — next fix, not yet done.
+
+## Running it
 
 ```
+ollama pull phi4-mini   # once
+dotnet build ApiFlowGraph.sln
+dotnet run --project src/ApiFlowGraph/ApiFlowGraph.csproj
 dotnet test tests/ApiFlowGraph.Tests/ApiFlowGraph.Tests.csproj
 ```
 
+## Structure
 
+```
+src/ApiFlowGraph/
+  OpenApiGraphExtractor.cs      spec -> Path/Operation/Response models
+  Dependency/DependencyGraph.cs topological sort over links
+  Prompt/                       the three strategies above
+tests/ApiFlowGraph.Tests/       xUnit tests for extractor + graph
+```
