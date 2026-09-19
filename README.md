@@ -55,6 +55,10 @@ This loads `src/ApiFlowGraph/openapi-spec.yaml`, resolves the dependency graph, 
 
 Running against the bundled `openapi-spec.yaml` (an organization/user API with a `links` dependency between them), using `GraphOnlyPrompt` (only the resolved graph is given to the model), produces something like:
 
+### Sample output (`GraphOnlyPrompt`)
+
+Running against the bundled `openapi-spec.yaml` (an organization/user API with a `links` dependency between them), using `GraphOnlyPrompt` (only the resolved graph is given to the model), produces something like:
+
 ````markdown
 # Skill: Create Organization and Add User
 
@@ -62,26 +66,26 @@ Running against the bundled `openapi-spec.yaml` (an organization/user API with a
 
 1. **Create an organization**
    - Send a POST request to create a new organization.
-     ```json
+```json
      {
        "name": "<organization_name>",
        "domain_data": [],
        "external_id": "",
        "metadata": {}
      }
-     ```
+```
    - The response will contain the `id` of the newly created organization.
 
 2. **Create a user**
    - Send a POST request to create a new user and assign them to an existing organization using its ID.
-     ```json
+```json
      {
        "email": "<user_email>",
        "organization_id": "<organization_id_from_step_1>",
        "first_name": "<user_first_name>",
        "last_name": "<user_last_name>"
      }
-     ```
+```
    - The response will confirm the creation of a new user.
 
 ## Example:
@@ -134,7 +138,7 @@ A separately generated skill for the same spec, this time using `RawSpecPrompt` 
 1. Call `/organizations` endpoint using `createOrganization`
    - Required fields for request body are `[name, domain_data]`.
 2. Extract `id` from response of step 1.
-3. Use extracted `id` as the value for field `o_id` in a new call to `/users`.
+3. Use extracted `id` as the value for field `organization_id` in a new call to `/users`.
 
 ## Skill Execution:
 
@@ -144,29 +148,28 @@ A separately generated skill for the same spec, this time using `RawSpecPrompt` 
   - domain_data (array of objects):
     - Each object contains `domain` and `state`.
       - Example Object in array:
-        ```json
+```json
         {
-          "domain": string,
-          "state": oneOf ["pending", "verified"]
+          "domain": "<string>",
+          "state": "pending | verified"
         }
-        ```
-- Required field: external_id (string): Your own identifier for this organization, used to map it back into your system.
+```
+  - external_id (string) — required: Your own identifier for this organization, used to map it back into your system.
   - Optional fields can include metadata as key/value pairs.
 
 ### Step 2: Extract Organization ID
 - From the response of step 1:
-  ```json
+```json
   {
-    "id": string,
-    ...
+    "id": "<string>"
   }
-  ```
+```
 - Store `response.body#/id` for use in subsequent steps or requests to `/users`.
 
-### Step 3: Create User and Link with Organization ID (o_id)
+### Step 3: Create User and Link with Organization ID
 - Call endpoint: POST /users with body containing at least:
   - email (string): Must be a valid format.
-  - o_id (string): The organization id extracted from step 1.
+  - organization_id (string): The organization id extracted from step 1.
 
 Optional fields for user creation can include first_name, last_name. These are not required but may enhance the user's profile information if provided.
 ````
